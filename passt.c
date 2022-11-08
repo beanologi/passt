@@ -73,6 +73,8 @@ char *epoll_type_str[] = {
 	[EPOLL_TYPE_TAP_PASTA]		= "/dev/net/tun device",
 	[EPOLL_TYPE_TAP_PASST]		= "connected qemu socket",
 	[EPOLL_TYPE_TAP_LISTEN]		= "listening qemu socket",
+	[EPOLL_TYPE_VHOST_CMD]		= "vhost-user command socket",
+	[EPOLL_TYPE_VHOST_KICK]		= "vhost-user kick socket",
 };
 static_assert(ARRAY_SIZE(epoll_type_str) == EPOLL_NUM_TYPES,
 	      "epoll_type_str[] doesn't match enum epoll_type");

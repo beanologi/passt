@@ -1054,7 +1054,7 @@ void packet_add_all_do(struct ctx *c, ssize_t len, char *p,
  * tap_sock_reset() - Handle closing or failure of connect AF_UNIX socket
  * @c:		Execution context
  */
-static void tap_sock_reset(struct ctx *c)
+void tap_sock_reset(struct ctx *c)
 {
 	if (c->one_off) {
 		info("Client closed connection, exiting");

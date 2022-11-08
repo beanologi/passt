@@ -42,6 +42,7 @@ union epoll_ref;
 #include "fwd.h"
 #include "tcp.h"
 #include "udp.h"
+#include "vhost_user.h"
 
 /**
  * enum epoll_type - Different types of fds we poll over
@@ -73,6 +74,10 @@ enum epoll_type {
 	EPOLL_TYPE_TAP_PASST,
 	/* socket listening for qemu socket connections */
 	EPOLL_TYPE_TAP_LISTEN,
+	/* vhost-user command socket */
+	EPOLL_TYPE_VHOST_CMD,
+	/* vhost-user kick event socket */
+	EPOLL_TYPE_VHOST_KICK,
 
 	EPOLL_NUM_TYPES,
 };
@@ -307,6 +312,9 @@ struct ctx {
 
 	int low_wmem;
 	int low_rmem;
+
+	/* vhost-user */
+	struct VuDev vdev;
 };
 
 void proto_update_l2_buf(const unsigned char *eth_d,
