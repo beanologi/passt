@@ -146,7 +146,7 @@ static void conf_ports(const struct ctx *c, char optname, const char *optarg,
 		if (fwd->mode)
 			goto mode_conflict;
 
-		if (c->mode != MODE_PASST)
+		if (c->mode == MODE_PASTA)
 			die("'all' port forwarding is only allowed for passt");
 
 		fwd->mode = FWD_ALL;
@@ -1226,7 +1226,7 @@ void conf(struct ctx *c, int argc, char **argv)
 			c->no_dhcp_dns = 0;
 			break;
 		case 6:
-			if (c->mode != MODE_PASST)
+			if (c->mode == MODE_PASTA)
 				die("--no-dhcp-dns is for passt mode only");
 
 			c->no_dhcp_dns = 1;
@@ -1238,7 +1238,7 @@ void conf(struct ctx *c, int argc, char **argv)
 			c->no_dhcp_dns_search = 0;
 			break;
 		case 8:
-			if (c->mode != MODE_PASST)
+			if (c->mode == MODE_PASTA)
 				die("--no-dhcp-search is for passt mode only");
 
 			c->no_dhcp_dns_search = 1;
@@ -1293,7 +1293,7 @@ void conf(struct ctx *c, int argc, char **argv)
 			break;
 		case 14:
 			fprintf(stdout,
-				c->mode == MODE_PASST ? "passt " : "pasta ");
+				c->mode == MODE_PASTA ? "pasta " : "passt ");
 			fprintf(stdout, VERSION_BLOB);
 			exit(EXIT_SUCCESS);
 		case 15:
@@ -1596,7 +1596,7 @@ void conf(struct ctx *c, int argc, char **argv)
 			v6_only = true;
 			break;
 		case '1':
-			if (c->mode != MODE_PASST)
+			if (c->mode == MODE_PASTA)
 				die("--one-off is for passt mode only");
 
 			if (c->one_off)
@@ -1643,7 +1643,7 @@ void conf(struct ctx *c, int argc, char **argv)
 	conf_ugid(runas, &uid, &gid);
 
 	if (logfile) {
-		logfile_init(c->mode == MODE_PASST ? "passt" : "pasta",
+		logfile_init(c->mode == MODE_PASTA ? "pasta" : "passt",
 			     logfile, logsize);
 	}
 

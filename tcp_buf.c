@@ -34,7 +34,7 @@
 
 #define TCP_FRAMES_MEM			128
 #define TCP_FRAMES							\
-	(c->mode == MODE_PASST ? TCP_FRAMES_MEM : 1)
+	(c->mode == MODE_PASTA ? 1 : TCP_FRAMES_MEM)
 
 /**
  * tcp_buf_seq_update - Sequences to update with length of frames once sent

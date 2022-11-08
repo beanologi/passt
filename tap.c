@@ -465,10 +465,10 @@ size_t tap_send_frames(const struct ctx *c, const struct iovec *iov, size_t n)
 	if (!n)
 		return 0;
 
-	if (c->mode == MODE_PASST)
-		m = tap_send_frames_passt(c, iov, n);
-	else
+	if (c->mode == MODE_PASTA)
 		m = tap_send_frames_pasta(c, iov, n);
+	else
+		m = tap_send_frames_passt(c, iov, n);
 
 	if (m < n)
 		debug("tap: failed to send %zu frames of %zu", n - m, n);
@@ -1399,10 +1399,10 @@ void tap_sock_init(struct ctx *c)
 		return;
 	}
 
-	if (c->mode == MODE_PASST) {
+	if (c->mode == MODE_PASTA) {
+		tap_sock_tun_init(c);
+	} else {
 		if (c->fd_tap_listen == -1)
 			tap_sock_unix_init(c);
-	} else {
-		tap_sock_tun_init(c);
 	}
 }
