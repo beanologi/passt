@@ -43,6 +43,9 @@
 #define ROUND_DOWN(x, y)	((x) & ~((y) - 1))
 #define ROUND_UP(x, y)		(((x) + (y) - 1) & ~((y) - 1))
 
+#define ALIGN_DOWN(n, m)	((n) / (m) * (m))
+#define ALIGN_UP(n, m)		ALIGN_DOWN((n) + (m) - 1, (m))
+
 #define MAX_FROM_BITS(n)	(((1U << (n)) - 1))
 
 #define BIT(n)			(1UL << (n))
@@ -109,6 +112,14 @@
 #define	htons_constant(x)	(__bswap_constant_16(x))
 #define	htonl_constant(x)	(__bswap_constant_32(x))
 #endif
+
+#define  barrier()		do { __asm__ __volatile__("" ::: "memory"); } while (0)
+#define smp_mb()		do { barrier(); __atomic_thread_fence(__ATOMIC_SEQ_CST); } while (0)
+#define smp_mb_release()	do { barrier(); __atomic_thread_fence(__ATOMIC_RELEASE); } while (0)
+#define smp_mb_acquire()	do { barrier(); __atomic_thread_fence(__ATOMIC_ACQUIRE); } while (0)
+
+#define smp_wmb()	smp_mb_release()
+#define smp_rmb()	smp_mb_acquire()
 
 #define NS_FN_STACK_SIZE	(RLIMIT_STACK_VAL * 1024 / 8)
 int do_clone(int (*fn)(void *), char *stack_area, size_t stack_size, int flags,
