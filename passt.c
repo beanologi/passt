@@ -280,6 +280,7 @@ int main(int argc, char **argv)
 	pasta_netns_quit_init(&c);
 
 	tap_sock_init(&c);
+	vu_init(&c);
 
 	secret_init(&c);
 
@@ -389,6 +390,12 @@ loop:
 			break;
 		case EPOLL_TYPE_ICMPV6:
 			icmp_sock_handler(&c, AF_INET6, ref);
+			break;
+		case EPOLL_TYPE_VHOST_CMD:
+			tap_handler_vu(&c, eventmask);
+			break;
+		case EPOLL_TYPE_VHOST_KICK:
+			vu_kick_cb(&c, ref);
 			break;
 		default:
 			/* Can't happen */

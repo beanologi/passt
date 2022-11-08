@@ -44,6 +44,7 @@
 #include "lineread.h"
 #include "isolation.h"
 #include "log.h"
+#include "vhost_user.h"
 
 /**
  * next_chunk - Return the next piece of a string delimited by a character
@@ -721,9 +722,12 @@ static void print_usage(const char *name, int status)
 		info(   "  -I, --ns-ifname NAME	namespace interface name");
 		info(   "    default: same interface name as external one");
 	} else {
-		info(   "  -s, --socket PATH	UNIX domain socket path");
+		info(   "  -s, --socket, --socket-path PATH	UNIX domain socket path");
 		info(   "    default: probe free path starting from "
 		     UNIX_SOCK_PATH, 1);
+		info(   "  --vhost-user		Enable vhost-user mode");
+		info(   "    UNIX domain socket is provided by -s option");
+		info(   "  --print-capabilities	print back-end capabilities in JSON format");
 	}
 
 	info(   "  -F, --fd FD		Use FD as pre-opened connected socket");
@@ -1109,6 +1113,7 @@ void conf(struct ctx *c, int argc, char **argv)
 		{"help",	no_argument,		NULL,		'h' },
 		{"socket",	required_argument,	NULL,		's' },
 		{"fd",		required_argument,	NULL,		'F' },
+		{"socket-path",	required_argument,	NULL,		's' }, /* vhost-user mandatory */
 		{"ns-ifname",	required_argument,	NULL,		'I' },
 		{"pcap",	required_argument,	NULL,		'p' },
 		{"pid",		required_argument,	NULL,		'P' },
@@ -1155,6 +1160,8 @@ void conf(struct ctx *c, int argc, char **argv)
 		{"config-net",	no_argument,		NULL,		17 },
 		{"no-copy-routes", no_argument,		NULL,		18 },
 		{"no-copy-addrs", no_argument,		NULL,		19 },
+		{"vhost-user",	no_argument,		NULL,		20 },
+		{"print-capabilities", no_argument,	NULL,		21 }, /* vhost-user mandatory */
 		{ 0 },
 	};
 	char userns[PATH_MAX] = { 0 }, netns[PATH_MAX] = { 0 };
@@ -1314,7 +1321,6 @@ void conf(struct ctx *c, int argc, char **argv)
 				       sizeof(c->ip6.ifname_out), "%s", optarg);
 			if (ret <= 0 || ret >= (int)sizeof(c->ip6.ifname_out))
 				die("Invalid interface name: %s", optarg);
-
 			break;
 		case 17:
 			if (c->mode != MODE_PASTA)
@@ -1335,6 +1341,16 @@ void conf(struct ctx *c, int argc, char **argv)
 
 			warn("--no-copy-addrs will be dropped soon");
 			c->no_copy_addrs = copy_addrs_opt = true;
+			break;
+		case 20:
+			if (c->mode == MODE_PASTA) {
+				err("--vhost-user is for passt mode only");
+				usage(argv[0]);
+			}
+			c->mode = MODE_VU;
+			break;
+		case 21:
+			vu_print_capabilities();
 			break;
 		case 'd':
 			if (c->debug)

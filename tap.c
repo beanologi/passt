@@ -58,6 +58,7 @@
 #include "packet.h"
 #include "tap.h"
 #include "log.h"
+#include "vhost_user.h"
 
 /* IPv4 (plus ARP) and IPv6 message batches from tap/guest to IP handlers */
 static PACKET_POOL_NOINIT(pool_tap4, TAP_MSGS, pkt_buf);
@@ -76,19 +77,22 @@ static PACKET_POOL_NOINIT(pool_tap6, TAP_MSGS, pkt_buf);
  */
 int tap_send(const struct ctx *c, const void *data, size_t len)
 {
+	int flags = MSG_NOSIGNAL | MSG_DONTWAIT;
+	uint32_t vnet_len = htonl(len);
+
 	pcap(data, len);
 
-	if (c->mode == MODE_PASST) {
-		int flags = MSG_NOSIGNAL | MSG_DONTWAIT;
-		uint32_t vnet_len = htonl(len);
-
+	switch (c->mode) {
+	case MODE_PASST:
 		if (send(c->fd_tap, &vnet_len, 4, flags) < 0)
 			return -1;
-
 		return send(c->fd_tap, data, len, flags);
+	case MODE_PASTA:
+		return write(c->fd_tap, (char *)data, len);
+	case MODE_VU:
+		return vu_send(c, data, len);
 	}
-
-	return write(c->fd_tap, (char *)data, len);
+	return 0;
 }
 
 /**
@@ -465,10 +469,20 @@ size_t tap_send_frames(const struct ctx *c, const struct iovec *iov, size_t n)
 	if (!n)
 		return 0;
 
-	if (c->mode == MODE_PASTA)
+	switch (c->mode) {
+	case MODE_PASTA:
 		m = tap_send_frames_pasta(c, iov, n);
-	else
+		break;
+	case MODE_PASST:
 		m = tap_send_frames_passt(c, iov, n);
+		break;
+	case MODE_VU:
+		m = tap_send_frames_vu(c, iov, n);
+		break;
+	default:
+		m = 0;
+		break;
+	}
 
 	if (m < n)
 		debug("tap: failed to send %zu frames of %zu", n - m, n);
@@ -1249,11 +1263,17 @@ static void tap_sock_unix_init(struct ctx *c)
 	ev.data.u64 = ref.u64;
 	epoll_ctl(c->epollfd, EPOLL_CTL_ADD, c->fd_tap_listen, &ev);
 
-	info("You can now start qemu (>= 7.2, with commit 13c6be96618c):");
-	info("    kvm ... -device virtio-net-pci,netdev=s -netdev stream,id=s,server=off,addr.type=unix,addr.path=%s",
-	     addr.sun_path);
-	info("or qrap, for earlier qemu versions:");
-	info("    ./qrap 5 kvm ... -net socket,fd=5 -net nic,model=virtio");
+	if (c->mode == MODE_VU) {
+		info("You can start qemu with:");
+		info("    kvm ... -chardev socket,id=chr0,path=%s -netdev vhost-user,id=netdev0,chardev=chr0 -device virtio-net,netdev=netdev0 -object memory-backend-memfd,id=memfd0,share=on,size=$RAMSIZE -numa node,memdev=memfd0\n",
+		     addr.sun_path);
+	} else {
+		info("You can now start qemu (>= 7.2, with commit 13c6be96618c):");
+		info("    kvm ... -device virtio-net-pci,netdev=s -netdev stream,id=s,server=off,addr.type=unix,addr.path=%s",
+		     addr.sun_path);
+		info("or qrap, for earlier qemu versions:");
+		info("    ./qrap 5 kvm ... -net socket,fd=5 -net nic,model=virtio");
+	}
 }
 
 /**
@@ -1263,7 +1283,7 @@ static void tap_sock_unix_init(struct ctx *c)
  */
 void tap_listen_handler(struct ctx *c, uint32_t events)
 {
-	union epoll_ref ref = { .type = EPOLL_TYPE_TAP_PASST };
+	union epoll_ref ref;
 	struct epoll_event ev = { 0 };
 	int v = INT_MAX / 2;
 	struct ucred ucred;
@@ -1304,7 +1324,13 @@ void tap_listen_handler(struct ctx *c, uint32_t events)
 		trace("tap: failed to set SO_SNDBUF to %i", v);
 
 	ref.fd = c->fd_tap;
-	ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+	if (c->mode == MODE_VU) {
+		ref.type = EPOLL_TYPE_VHOST_CMD;
+		ev.events = EPOLLIN | EPOLLRDHUP;
+	} else {
+		ref.type = EPOLL_TYPE_TAP_PASST;
+		ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
+	}
 	ev.data.u64 = ref.u64;
 	epoll_ctl(c->epollfd, EPOLL_CTL_ADD, c->fd_tap, &ev);
 }
@@ -1388,12 +1414,21 @@ void tap_sock_init(struct ctx *c)
 
 		ASSERT(c->one_off);
 		ref.fd = c->fd_tap;
-		if (c->mode == MODE_PASST)
+		switch (c->mode) {
+		case MODE_PASST:
 			ref.type = EPOLL_TYPE_TAP_PASST;
-		else
+			ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+			break;
+		case MODE_PASTA:
 			ref.type = EPOLL_TYPE_TAP_PASTA;
+			ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+			break;
+		case MODE_VU:
+			ref.type = EPOLL_TYPE_VHOST_CMD;
+			ev.events = EPOLLIN | EPOLLRDHUP;
+			break;
+		}
 
-		ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
 		ev.data.u64 = ref.u64;
 		epoll_ctl(c->epollfd, EPOLL_CTL_ADD, c->fd_tap, &ev);
 		return;

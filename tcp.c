@@ -1049,7 +1049,8 @@ size_t tcp_fill_headers4(const struct ctx *c,
 
 	tcp_fill_header(th, conn, seq);
 
-	tcp_update_check_tcp4(iph, th);
+	if (c->mode != MODE_VU || *c->pcap)
+		tcp_update_check_tcp4(iph, th);
 
 	return ip_len;
 }
@@ -1090,7 +1091,8 @@ size_t tcp_fill_headers6(const struct ctx *c,
 
 	tcp_fill_header(th, conn, seq);
 
-	tcp_update_check_tcp6(ip6h, th);
+	if (c->mode != MODE_VU || *c->pcap)
+		tcp_update_check_tcp6(ip6h, th);
 
 	return ip_len;
 }

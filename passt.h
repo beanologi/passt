@@ -145,6 +145,7 @@ struct fqdn {
 enum passt_modes {
 	MODE_PASST,
 	MODE_PASTA,
+	MODE_VU,
 };
 
 /**

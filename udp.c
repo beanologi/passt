@@ -681,9 +681,12 @@ static size_t udp_update_hdr6(const struct ctx *c, struct ipv6hdr *ip6h,
 	uh->dest = htons(dstport);
 	uh->len = ip6h->payload_len;
 	uh->check = 0;
-	uh->check = csum(uh, payload_len,
-			 proto_ipv6_header_psum(payload_len, IPPROTO_UDP,
-						src, dst));
+	if (c->mode != MODE_VU || *c->pcap)
+		uh->check = csum(uh, payload_len,
+				 proto_ipv6_header_psum(payload_len, IPPROTO_UDP,
+							src, dst));
+	else
+		uh->check = 0xffff; /* zero checksum is invalid with IPv6 */
 
 	return ip_len;
 }
