@@ -22,6 +22,36 @@
 #include "util.h"
 #include "log.h"
 
+static int packet_check_range(const struct pool *p, size_t offset, size_t len,
+			      const char *start, const char *func, int line)
+{
+	if (start < p->buf) {
+		if (func) {
+			trace("add packet start %p before buffer start %p, "
+			      "%s:%i", (void *)start, (void *)p->buf, func, line);
+		}
+		return -1;
+	}
+
+	if (start + len + offset > p->buf + p->buf_size) {
+		if (func) {
+			trace("packet offset plus length %lu from size %lu, "
+			      "%s:%i", start - p->buf + len + offset,
+			      p->buf_size, func, line);
+		}
+		return -1;
+	}
+
+#if UINTPTR_MAX == UINT64_MAX
+	if ((uintptr_t)start - (uintptr_t)p->buf > UINT32_MAX) {
+		trace("add packet start %p, buffer start %p, %s:%i",
+		      (void *)start, (void *)p->buf, func, line);
+		return -1;
+	}
+#endif
+
+	return 0;
+}
 /**
  * packet_add_do() - Add data as packet descriptor to given pool
  * @p:		Existing pool
@@ -41,34 +71,16 @@ void packet_add_do(struct pool *p, size_t len, const char *start,
 		return;
 	}
 
-	if (start < p->buf) {
-		trace("add packet start %p before buffer start %p, %s:%i",
-		      (void *)start, (void *)p->buf, func, line);
+	if (packet_check_range(p, 0, len, start, func, line))
 		return;
-	}
-
-	if (start + len > p->buf + p->buf_size) {
-		trace("add packet start %p, length: %zu, buffer end %p, %s:%i",
-		      (void *)start, len, (void *)(p->buf + p->buf_size),
-		      func, line);
-		return;
-	}
 
 	if (len > UINT16_MAX) {
 		trace("add packet length %zu, %s:%i", len, func, line);
 		return;
 	}
 
-#if UINTPTR_MAX == UINT64_MAX
-	if ((uintptr_t)start - (uintptr_t)p->buf > UINT32_MAX) {
-		trace("add packet start %p, buffer start %p, %s:%i",
-		      (void *)start, (void *)p->buf, func, line);
-		return;
-	}
-#endif
-
-	p->pkt[idx].offset = start - p->buf;
-	p->pkt[idx].len = len;
+	p->pkt[idx].iov_base = (void *)start;
+	p->pkt[idx].iov_len = len;
 
 	p->count++;
 }
@@ -104,28 +116,23 @@ void *packet_get_do(const struct pool *p, size_t idx, size_t offset,
 		return NULL;
 	}
 
-	if (p->pkt[idx].offset + len + offset > p->buf_size) {
+	if (len + offset > p->pkt[idx].iov_len) {
 		if (func) {
-			trace("packet offset plus length %zu from size %zu, "
-			      "%s:%i", p->pkt[idx].offset + len + offset,
-			      p->buf_size, func, line);
-		}
-		return NULL;
-	}
-
-	if (len + offset > p->pkt[idx].len) {
-		if (func) {
-			trace("data length %zu, offset %zu from length %u, "
-			      "%s:%i", len, offset, p->pkt[idx].len,
+			trace("data length %zu, offset %zu from length %zu, "
+			      "%s:%i", len, offset, p->pkt[idx].iov_len,
 			      func, line);
 		}
 		return NULL;
 	}
 
-	if (left)
-		*left = p->pkt[idx].len - offset - len;
+	if (packet_check_range(p, offset, len, p->pkt[idx].iov_base,
+			       func, line))
+		return NULL;
 
-	return p->buf + p->pkt[idx].offset + offset;
+	if (left)
+		*left = p->pkt[idx].iov_len - offset - len;
+
+	return (char *)p->pkt[idx].iov_base + offset;
 }
 
 /**
