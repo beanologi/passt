@@ -707,7 +707,7 @@ resume:
 		if (!eh)
 			continue;
 		if (ntohs(eh->h_proto) == ETH_P_ARP) {
-			PACKET_POOL_P(pkt, 1, in->buf, sizeof(pkt_buf));
+			PACKET_POOL_P(pkt, 1, in->buf, in->buf_size);
 
 			packet_add(pkt, l2_len, (char *)eh);
 			arp(c, pkt);
@@ -747,7 +747,7 @@ resume:
 			continue;
 
 		if (iph->protocol == IPPROTO_ICMP) {
-			PACKET_POOL_P(pkt, 1, in->buf, sizeof(pkt_buf));
+			PACKET_POOL_P(pkt, 1, in->buf, in->buf_size);
 
 			if (c->no_icmp)
 				continue;
@@ -766,7 +766,7 @@ resume:
 			continue;
 
 		if (iph->protocol == IPPROTO_UDP) {
-			PACKET_POOL_P(pkt, 1, in->buf, sizeof(pkt_buf));
+			PACKET_POOL_P(pkt, 1, in->buf, in->buf_size);
 
 			packet_add(pkt, l2_len, (char *)eh);
 			if (dhcp(c, pkt))
@@ -915,7 +915,7 @@ resume:
 		}
 
 		if (proto == IPPROTO_ICMPV6) {
-			PACKET_POOL_P(pkt, 1, in->buf, sizeof(pkt_buf));
+			PACKET_POOL_P(pkt, 1, in->buf, in->buf_size);
 
 			if (c->no_icmp)
 				continue;
@@ -939,7 +939,7 @@ resume:
 		uh = (struct udphdr *)l4h;
 
 		if (proto == IPPROTO_UDP) {
-			PACKET_POOL_P(pkt, 1, in->buf, sizeof(pkt_buf));
+			PACKET_POOL_P(pkt, 1, in->buf, in->buf_size);
 
 			packet_add(pkt, l4_len, l4h);
 
@@ -1391,6 +1391,23 @@ static void tap_sock_tun_init(struct ctx *c)
 	epoll_ctl(c->epollfd, EPOLL_CTL_ADD, c->fd_tap, &ev);
 }
 
+void tap_sock_update_buf(void *base, size_t size)
+{
+	int i;
+
+	pool_tap4_storage.buf = base;
+	pool_tap4_storage.buf_size = size;
+	pool_tap6_storage.buf = base;
+	pool_tap6_storage.buf_size = size;
+
+	for (i = 0; i < TAP_SEQS; i++) {
+		tap4_l4[i].p.buf = base;
+		tap4_l4[i].p.buf_size = size;
+		tap6_l4[i].p.buf = base;
+		tap6_l4[i].p.buf_size = size;
+	}
+}
+
 /**
  * tap_sock_init() - Create and set up AF_UNIX socket or tuntap file descriptor
  * @c:		Execution context
@@ -1402,10 +1419,22 @@ void tap_sock_init(struct ctx *c)
 
 	pool_tap4_storage = PACKET_INIT(pool_tap4, TAP_MSGS, pkt_buf, sz);
 	pool_tap6_storage = PACKET_INIT(pool_tap6, TAP_MSGS, pkt_buf, sz);
+	if (c->mode == MODE_VU) {
+		pool_tap4_storage.buf = NULL;
+		pool_tap4_storage.buf_size = 0;
+		pool_tap6_storage.buf = NULL;
+		pool_tap6_storage.buf_size = 0;
+	}
 
 	for (i = 0; i < TAP_SEQS; i++) {
 		tap4_l4[i].p = PACKET_INIT(pool_l4, UIO_MAXIOV, pkt_buf, sz);
 		tap6_l4[i].p = PACKET_INIT(pool_l4, UIO_MAXIOV, pkt_buf, sz);
+		if (c->mode == MODE_VU) {
+			tap4_l4[i].p.buf = NULL;
+			tap4_l4[i].p.buf_size = 0;
+			tap6_l4[i].p.buf = NULL;
+			tap6_l4[i].p.buf_size = 0;
+		}
 	}
 
 	if (c->fd_tap != -1) { /* Passed as --fd */

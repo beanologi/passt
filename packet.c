@@ -25,6 +25,12 @@
 static int packet_check_range(const struct pool *p, size_t offset, size_t len,
 			      const char *start, const char *func, int line)
 {
+	ASSERT(p->buf);
+
+	if (p->buf_size == 0)
+		return vu_packet_check_range((void *)p->buf, offset, len, start,
+					     func, line);
+
 	if (start < p->buf) {
 		if (func) {
 			trace("add packet start %p before buffer start %p, "

@@ -98,6 +98,7 @@ void tap_handler_pasta(struct ctx *c, uint32_t events,
 void tap_handler_passt(struct ctx *c, uint32_t events,
 		       const struct timespec *now);
 void tap_sock_reset(struct ctx *c);
+void tap_sock_update_buf(void *base, size_t size);
 void tap_sock_init(struct ctx *c);
 void pool_flush_all(void);
 void tap_handler_all(struct ctx *c, const struct timespec *now);

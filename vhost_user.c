@@ -334,6 +334,25 @@ static bool map_ring(VuDev *vdev, VuVirtq *vq)
 	return !(vq->vring.desc && vq->vring.used && vq->vring.avail);
 }
 
+int vu_packet_check_range(void *buf, size_t offset, size_t len, const char *start,
+			  const char *func, int line)
+{
+	VuDevRegion *dev_region;
+
+	for (dev_region = buf; dev_region->mmap_addr; dev_region++) {
+		if ((char *)dev_region->mmap_addr <= start &&
+		    start + offset + len < (char *)dev_region->mmap_addr +
+					   dev_region->mmap_offset +
+					   dev_region->size)
+			return 0;
+	}
+	if (func) {
+		trace("cannot find region, %s:%i", func, line);
+	}
+
+	return -1;
+}
+
 /*
  * #syscalls:passt mmap munmap
  */
@@ -399,6 +418,12 @@ static bool vu_set_mem_table_exec(VuDev *vdev,
 			}
 		}
 	}
+
+	/* XXX */
+	ASSERT(vdev->nregions < VHOST_USER_MAX_RAM_SLOTS - 1);
+	vdev->regions[vdev->nregions].mmap_addr = 0; /* mark EOF for vu_packet_check_range() */
+
+	tap_sock_update_buf(vdev->regions, 0);
 
 	return false;
 }
@@ -650,8 +675,8 @@ static void vu_handle_tx(VuDev *vdev, int index)
 	VuVirtq *vq = &vdev->vq[index];
 	int hdrlen = vdev->hdrlen;
 	struct timespec now;
-	char *p;
-	size_t n;
+	unsigned int indexes[VIRTQUEUE_MAX_SIZE];
+	int count;
 
 	if (index % 2 != VHOST_USER_TX_QUEUE) {
 		debug("index %d is not an TX queue", index);
@@ -660,14 +685,11 @@ static void vu_handle_tx(VuDev *vdev, int index)
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
 
-	p = pkt_buf;
-
 	pool_flush_all();
 
+	count = 0;
 	while (1) {
 		VuVirtqElement *elem;
-		unsigned int out_num;
-		struct iovec sg[VIRTQUEUE_MAX_SIZE], *out_sg;
 
 		ASSERT(index == VHOST_USER_TX_QUEUE);
 		elem = vu_queue_pop(vdev, vq, sizeof(VuVirtqElement), buffer[index]);
@@ -675,32 +697,26 @@ static void vu_handle_tx(VuDev *vdev, int index)
 			break;
 		}
 
-		out_num = elem->out_num;
-		out_sg = elem->out_sg;
-		if (out_num < 1) {
+		if (elem->out_num < 1) {
 			debug("virtio-net header not in first element");
 			break;
 		}
+		ASSERT(elem->out_num == 1);
 
-		if (hdrlen) {
-			unsigned sg_num;
-
-			sg_num = iov_copy(sg, ARRAY_SIZE(sg), out_sg, out_num,
-					  hdrlen, -1);
-			out_num = sg_num;
-			out_sg = sg;
-		}
-
-		n = iov_to_buf(out_sg, out_num, 0, p, TAP_BUF_FILL);
-
-		packet_add_all(c, n, p);
-
-		p += n;
-
-		vu_queue_push(vdev, vq, elem, 0);
-		vu_queue_notify(vdev, vq);
+		packet_add_all(c, elem->out_sg[0].iov_len - hdrlen,
+			       (char *)elem->out_sg[0].iov_base + hdrlen);
+		indexes[count] = elem->index;
+		count++;
 	}
 	tap_handler_all(c, &now);
+
+	if (count) {
+		int i;
+		for (i = 0; i < count; i++)
+			vu_queue_fill_by_index(vdev, vq, indexes[i], 0, i);
+		vu_queue_flush(vdev, vq, count);
+		vu_queue_notify(vdev, vq);
+	}
 }
 
 void vu_kick_cb(struct ctx *c, union epoll_ref ref)

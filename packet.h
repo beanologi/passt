@@ -22,6 +22,8 @@ struct pool {
 	struct iovec pkt[1];
 };
 
+int vu_packet_check_range(void *buf, size_t offset, size_t len,
+			  const char *start, const char *func, int line);
 void packet_add_do(struct pool *p, size_t len, const char *start,
 		   const char *func, int line);
 void *packet_get_do(const struct pool *p, const size_t idx,
