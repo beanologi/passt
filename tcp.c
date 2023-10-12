@@ -1359,40 +1359,6 @@ static size_t tcp_fill_headers6(const struct ctx *c,
 }
 
 /**
- * tcp_l2_buf_fill_headers() - Fill 802.3, IP, TCP headers in pre-cooked buffers
- * @c:		Execution context
- * @conn:	Connection pointer
- * @iov:	Pointer to an array of iovec of TCP pre-cooked buffer
- * @plen:	Payload length (including TCP header options)
- * @check:	Checksum, if already known
- * @seq:	Sequence number for this segment
- *
- * Return: frame length including L2 headers, host order
- */
-static size_t tcp_l2_buf_fill_headers(const struct ctx *c,
-				      const struct tcp_tap_conn *conn,
-				      struct iovec *iov, size_t plen,
-				      const uint16_t *check, uint32_t seq)
-{
-	const struct in_addr *a4 = inany_v4(&conn->faddr);
-	size_t ip_len, tlen;
-
-	if (a4) {
-		ip_len = tcp_fill_headers4(c, conn, iov[TCP_IOV_IP].iov_base,
-					   iov[TCP_IOV_PAYLOAD].iov_base, plen,
-					   check, seq);
-		tlen = ip_len - sizeof(struct iphdr);
-	} else {
-		ip_len = tcp_fill_headers6(c, conn, iov[TCP_IOV_IP].iov_base,
-					   iov[TCP_IOV_PAYLOAD].iov_base, plen,
-					   seq);
-		tlen = ip_len - sizeof(struct ipv6hdr);
-	}
-
-	return tlen;
-}
-
-/**
  * tcp_update_seqack_wnd() - Update ACK sequence and window to guest/tap
  * @c:		Execution context
  * @conn:	Connection pointer
@@ -1509,26 +1475,27 @@ static void tcp_update_seqack_from_tap(const struct ctx *c,
 }
 
 /**
- * tcp_send_flag() - Send segment with flags to tap (no payload)
+ * tcp_fill_flag_header() - Prepare header for flags-only segment (no payload)
  * @c:		Execution context
  * @conn:	Connection pointer
  * @flags:	TCP flags: if not set, send segment only if ACK is due
+ * @th:		TCP header to update
+ * @opts:	buffer to store TCP option
+ * @optlen:	size of the TCP option buffer
  *
- * Return: negative error code on connection reset, 0 otherwise
+ * Return: < 0 error code on connection reset,
+ * 	     0 if there is no flag to send
+ * 	     1 otherwise
  */
-static int tcp_send_flag(struct ctx *c, struct tcp_tap_conn *conn, int flags)
+static int tcp_fill_flag_header(struct ctx *c, struct tcp_tap_conn *conn,
+				int flags, struct tcphdr *th, char *opts,
+				size_t *optlen)
 {
 	uint32_t prev_ack_to_tap = conn->seq_ack_to_tap;
 	uint32_t prev_wnd_to_tap = conn->wnd_to_tap;
-	struct tcp_l2_flags_t *payload;
 	struct tcp_info tinfo = { 0 };
 	socklen_t sl = sizeof(tinfo);
 	int s = conn->sock;
-	size_t optlen = 0;
-	struct iovec *iov;
-	struct iovec *dup_iov;
-	struct tcphdr *th;
-	char *data;
 
 	if (SEQ_GE(conn->seq_ack_to_tap, conn->seq_from_tap) &&
 	    !flags && conn->wnd_to_tap)
@@ -1550,25 +1517,14 @@ static int tcp_send_flag(struct ctx *c, struct tcp_tap_conn *conn, int flags)
 	if (!tcp_update_seqack_wnd(c, conn, flags, &tinfo) && !flags)
 		return 0;
 
-	if (CONN_V4(conn)) {
-		iov = tcp4_l2_flags_iov[tcp4_l2_flags_buf_used++];
-		dup_iov = tcp4_l2_flags_iov[tcp4_l2_flags_buf_used];
-	} else {
-		iov = tcp6_l2_flags_iov[tcp6_l2_flags_buf_used++];
-		dup_iov = tcp6_l2_flags_iov[tcp6_l2_flags_buf_used];
-	}
-	payload = iov[TCP_IOV_PAYLOAD].iov_base;
-	th = &payload->th;
-	data = payload->opts;
-
 	if (flags & SYN) {
 		int mss;
 
 		/* Options: MSS, NOP and window scale (8 bytes) */
-		optlen = OPT_MSS_LEN + 1 + OPT_WS_LEN;
+		*optlen = OPT_MSS_LEN + 1 + OPT_WS_LEN;
 
-		*data++ = OPT_MSS;
-		*data++ = OPT_MSS_LEN;
+		*opts++ = OPT_MSS;
+		*opts++ = OPT_MSS_LEN;
 
 		if (c->mtu == -1) {
 			mss = tinfo.tcpi_snd_mss;
@@ -1581,16 +1537,16 @@ static int tcp_send_flag(struct ctx *c, struct tcp_tap_conn *conn, int flags)
 			else if (mss > PAGE_SIZE)
 				mss = ROUND_DOWN(mss, PAGE_SIZE);
 		}
-		*(uint16_t *)data = htons(MIN(USHRT_MAX, mss));
+		*(uint16_t *)opts = htons(MIN(USHRT_MAX, mss));
 
-		data += OPT_MSS_LEN - 2;
+		opts += OPT_MSS_LEN - 2;
 
 		conn->ws_to_tap = MIN(MAX_WS, tinfo.tcpi_snd_wscale);
 
-		*data++ = OPT_NOP;
-		*data++ = OPT_WS;
-		*data++ = OPT_WS_LEN;
-		*data++ = conn->ws_to_tap;
+		*opts++ = OPT_NOP;
+		*opts++ = OPT_WS;
+		*opts++ = OPT_WS_LEN;
+		*opts++ = conn->ws_to_tap;
 
 		th->ack = !!(flags & ACK);
 	} else {
@@ -1599,15 +1555,11 @@ static int tcp_send_flag(struct ctx *c, struct tcp_tap_conn *conn, int flags)
 			  !prev_wnd_to_tap;
 	}
 
-	th->doff = (sizeof(*th) + optlen) / 4;
+	th->doff = (sizeof(*th) + *optlen) / 4;
 
 	th->rst = !!(flags & RST);
 	th->syn = !!(flags & SYN);
 	th->fin = !!(flags & FIN);
-
-	iov[TCP_IOV_PAYLOAD].iov_len = tcp_l2_buf_fill_headers(c, conn, iov,
-							       optlen, NULL,
-							      conn->seq_to_tap);
 
 	if (th->ack) {
 		if (SEQ_GE(conn->seq_ack_to_tap, conn->seq_from_tap))
@@ -1622,6 +1574,48 @@ static int tcp_send_flag(struct ctx *c, struct tcp_tap_conn *conn, int flags)
 	/* RFC 793, 3.1: "[...] and the first data octet is ISN+1." */
 	if (th->fin || th->syn)
 		conn->seq_to_tap++;
+
+	return 1;
+}
+
+static int tcp_send_flag(struct ctx *c, struct tcp_tap_conn *conn, int flags)
+{
+	struct tcp_l2_flags_t *payload;
+	struct iovec *dup_iov;
+	struct iovec *iov;
+	struct tcphdr *th;
+	size_t optlen = 0;
+	size_t ip_len;
+	char *data;
+	int ret;
+
+	if (CONN_V4(conn)) {
+		iov = tcp4_l2_flags_iov[tcp4_l2_flags_buf_used++];
+		dup_iov = tcp4_l2_flags_iov[tcp4_l2_flags_buf_used];
+	} else {
+		iov = tcp6_l2_flags_iov[tcp6_l2_flags_buf_used++];
+		dup_iov = tcp6_l2_flags_iov[tcp6_l2_flags_buf_used];
+	}
+	payload = iov[TCP_IOV_PAYLOAD].iov_base;
+	th = &payload->th;
+	data = payload->opts;
+
+	ret = tcp_fill_flag_header(c, conn, flags, th, data, &optlen);
+	if (ret <= 0)
+		return ret;
+
+	if (CONN_V4(conn)) {
+		struct iphdr *iph = iov[TCP_IOV_IP].iov_base;
+
+		ip_len = tcp_fill_headers4(c, conn, iph, th, optlen, NULL,
+					   conn->seq_to_tap);
+	} else {
+		struct ipv6hdr *ip6h = iov[TCP_IOV_IP].iov_base;
+
+		ip_len = tcp_fill_headers6(c, conn, ip6h, th, optlen,
+					   conn->seq_to_tap);
+	}
+	iov[TCP_IOV_PAYLOAD].iov_len = ip_len;
 
 	if (flags & DUP_ACK) {
 		int i;
@@ -2103,8 +2097,11 @@ static void tcp_data_to_tap(const struct ctx *c, struct tcp_tap_conn *conn,
 		tcp4_l2_buf_seq_update[tcp4_l2_buf_used].len = plen;
 
 		iov = tcp4_l2_iov[tcp4_l2_buf_used++];
-		iov[TCP_IOV_PAYLOAD].iov_len = tcp_l2_buf_fill_headers(c, conn,
-							iov, plen, check, seq);
+		iov[TCP_IOV_PAYLOAD].iov_len = tcp_fill_headers4(c, conn,
+						iov[TCP_IOV_IP].iov_base,
+						iov[TCP_IOV_PAYLOAD].iov_base,
+						plen, check, seq);
+
 		if (tcp4_l2_buf_used > TCP_FRAMES_MEM - 1)
 			tcp_l2_data_buf_flush(c);
 	} else if (CONN_V6(conn)) {
@@ -2112,8 +2109,11 @@ static void tcp_data_to_tap(const struct ctx *c, struct tcp_tap_conn *conn,
 		tcp6_l2_buf_seq_update[tcp6_l2_buf_used].len = plen;
 
 		iov = tcp6_l2_iov[tcp6_l2_buf_used++];
-		iov[TCP_IOV_PAYLOAD].iov_len = tcp_l2_buf_fill_headers(c, conn,
-							iov, plen, NULL, seq);
+		iov[TCP_IOV_PAYLOAD].iov_len = tcp_fill_headers6(c, conn,
+						iov[TCP_IOV_IP].iov_base,
+						iov[TCP_IOV_PAYLOAD].iov_base,
+						plen, seq);
+
 		if (tcp6_l2_buf_used > TCP_FRAMES_MEM - 1)
 			tcp_l2_data_buf_flush(c);
 	}
