@@ -108,7 +108,6 @@ static struct tcp_l2_flags_t	tcp6_l2_flags[TCP_FRAMES_MEM];
 static unsigned int tcp6_l2_flags_buf_used;
 
 /* recvmsg()/sendmsg() data for tap */
-static char 		tcp_buf_discard		[MAX_WINDOW];
 static struct iovec	iov_sock		[TCP_FRAMES_MEM + 1];
 
 static struct iovec	tcp4_l2_iov		[TCP_FRAMES_MEM][TCP_IOV_NUM];

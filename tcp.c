@@ -303,6 +303,7 @@
 #include "flow_table.h"
 #include "tcp_internal.h"
 #include "tcp_buf.h"
+#include "tcp_vu.h"
 
 /* Sides of a flow as we use them in "tap" connections */
 #define	SOCKSIDE	0
@@ -373,6 +374,8 @@ static int tcp_sock_ns		[NUM_PORTS][IP_VERSIONS];
  * to be local to the host), LRU
  */
 static union inany_addr low_rtt_dst[LOW_RTT_TABLE_SIZE];
+
+char		tcp_buf_discard		[MAX_WINDOW];
 
 /* sendmsg() to socket */
 static struct iovec	tcp_iov			[UIO_MAXIOV];
@@ -1049,7 +1052,7 @@ size_t tcp_fill_headers4(const struct ctx *c,
 
 	tcp_fill_header(th, conn, seq);
 
-	if (c->mode != MODE_VU || *c->pcap)
+	if (c->mode != MODE_VU)
 		tcp_update_check_tcp4(iph, th);
 
 	return ip_len;
@@ -1091,7 +1094,7 @@ size_t tcp_fill_headers6(const struct ctx *c,
 
 	tcp_fill_header(th, conn, seq);
 
-	if (c->mode != MODE_VU || *c->pcap)
+	if (c->mode != MODE_VU)
 		tcp_update_check_tcp6(ip6h, th);
 
 	return ip_len;
@@ -1317,6 +1320,13 @@ int tcp_fill_flag_header(struct ctx *c, struct tcp_tap_conn *conn,
 	return 1;
 }
 
+int tcp_send_flag(struct ctx *c, struct tcp_tap_conn *conn, int flags)
+{
+	if (c->mode == MODE_VU)
+		return tcp_vu_send_flag(c, conn, flags);
+	return tcp_buf_send_flag(c, conn, flags);
+}
+
 /**
  * tcp_rst_do() - Reset a tap connection: send RST segment to tap, close socket
  * @c:		Execution context
@@ -1327,7 +1337,7 @@ void tcp_rst_do(struct ctx *c, struct tcp_tap_conn *conn)
 	if (conn->events == CLOSED)
 		return;
 
-	if (!tcp_buf_send_flag(c, conn, RST))
+	if (!tcp_send_flag(c, conn, RST))
 		conn_event(c, conn, CLOSED);
 }
 
@@ -1470,12 +1480,14 @@ int tcp_conn_sock(const struct ctx *c, sa_family_t af)
  *
  * Return: clamped MSS value
  */
-static uint16_t tcp_conn_tap_mss(const struct tcp_tap_conn *conn,
+static uint16_t tcp_conn_tap_mss(const struct ctx *c,
+				 const struct tcp_tap_conn *conn,
 				 const char *opts, size_t optlen)
 {
 	unsigned int mss;
 	int ret;
 
+	(void)c; /* unused */
 	(void)conn; /* unused */
 
 	if ((ret = tcp_opt_get(opts, optlen, OPT_MSS, NULL, NULL)) < 0)
@@ -1639,7 +1651,7 @@ static void tcp_conn_from_tap(struct ctx *c, sa_family_t af,
 
 	conn->wnd_to_tap = WINDOW_DEFAULT;
 
-	mss = tcp_conn_tap_mss(conn, opts, optlen);
+	mss = tcp_conn_tap_mss(c, conn, opts, optlen);
 	if (setsockopt(s, SOL_TCP, TCP_MAXSEG, &mss, sizeof(mss)))
 		flow_trace(conn, "failed to set TCP_MAXSEG on socket %i", s);
 	MSS_SET(conn, mss);
@@ -1696,7 +1708,7 @@ static void tcp_conn_from_tap(struct ctx *c, sa_family_t af,
 	} else {
 		tcp_get_sndbuf(conn);
 
-		if (tcp_buf_send_flag(c, conn, SYN | ACK))
+		if (tcp_send_flag(c, conn, SYN | ACK))
 			return;
 
 		conn_event(c, conn, TAP_SYN_ACK_SENT);
@@ -1742,6 +1754,14 @@ static int tcp_sock_consume(const struct tcp_tap_conn *conn, uint32_t ack_seq)
 		return -errno;
 
 	return 0;
+}
+
+static int tcp_data_from_sock(struct ctx *c, struct tcp_tap_conn *conn)
+{
+	if (c->mode == MODE_VU)
+		return tcp_vu_data_from_sock(c, conn);
+
+	return tcp_buf_data_from_sock(c, conn);
 }
 
 /**
@@ -1875,7 +1895,7 @@ static int tcp_data_from_tap(struct ctx *c, struct tcp_tap_conn *conn,
 			   "fast re-transmit, ACK: %u, previous sequence: %u",
 			   max_ack_seq, conn->seq_to_tap);
 		conn->seq_to_tap = max_ack_seq;
-		tcp_buf_data_from_sock(c, conn);
+		tcp_data_from_sock(c, conn);
 	}
 
 	if (!iov_i)
@@ -1891,14 +1911,14 @@ eintr:
 			 *   Then swiftly looked away and left.
 			 */
 			conn->seq_from_tap = seq_from_tap;
-			tcp_buf_send_flag(c, conn, ACK);
+			tcp_send_flag(c, conn, ACK);
 		}
 
 		if (errno == EINTR)
 			goto eintr;
 
 		if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			tcp_buf_send_flag(c, conn, ACK_IF_NEEDED);
+			tcp_send_flag(c, conn, ACK_IF_NEEDED);
 			return p->count - idx;
 
 		}
@@ -1908,7 +1928,7 @@ eintr:
 	if (n < (int)(seq_from_tap - conn->seq_from_tap)) {
 		partial_send = 1;
 		conn->seq_from_tap += n;
-		tcp_buf_send_flag(c, conn, ACK_IF_NEEDED);
+		tcp_send_flag(c, conn, ACK_IF_NEEDED);
 	} else {
 		conn->seq_from_tap += n;
 	}
@@ -1921,7 +1941,7 @@ out:
 		 */
 		if (conn->seq_dup_ack_approx != (conn->seq_from_tap & 0xff)) {
 			conn->seq_dup_ack_approx = conn->seq_from_tap & 0xff;
-			tcp_buf_send_flag(c, conn, DUP_ACK);
+			tcp_send_flag(c, conn, DUP_ACK);
 		}
 		return p->count - idx;
 	}
@@ -1935,7 +1955,7 @@ out:
 
 		conn_event(c, conn, TAP_FIN_RCVD);
 	} else {
-		tcp_buf_send_flag(c, conn, ACK_IF_NEEDED);
+		tcp_send_flag(c, conn, ACK_IF_NEEDED);
 	}
 
 	return p->count - idx;
@@ -1960,7 +1980,7 @@ static void tcp_conn_from_sock_finish(struct ctx *c, struct tcp_tap_conn *conn,
 	if (!(conn->wnd_from_tap >>= conn->ws_from_tap))
 		conn->wnd_from_tap = 1;
 
-	MSS_SET(conn, tcp_conn_tap_mss(conn, opts, optlen));
+	MSS_SET(conn, tcp_conn_tap_mss(c, conn, opts, optlen));
 
 	conn->seq_init_from_tap = ntohl(th->seq) + 1;
 	conn->seq_from_tap = conn->seq_init_from_tap;
@@ -1971,8 +1991,8 @@ static void tcp_conn_from_sock_finish(struct ctx *c, struct tcp_tap_conn *conn,
 	/* The client might have sent data already, which we didn't
 	 * dequeue waiting for SYN,ACK from tap -- check now.
 	 */
-	tcp_buf_data_from_sock(c, conn);
-	tcp_buf_send_flag(c, conn, ACK);
+	tcp_data_from_sock(c, conn);
+	tcp_send_flag(c, conn, ACK);
 }
 
 /**
@@ -2052,7 +2072,7 @@ int tcp_tap_handler(struct ctx *c, uint8_t pif, sa_family_t af,
 			conn->seq_from_tap++;
 
 			shutdown(conn->sock, SHUT_WR);
-			tcp_buf_send_flag(c, conn, ACK);
+			tcp_send_flag(c, conn, ACK);
 			conn_event(c, conn, SOCK_FIN_SENT);
 
 			return 1;
@@ -2063,7 +2083,7 @@ int tcp_tap_handler(struct ctx *c, uint8_t pif, sa_family_t af,
 
 		tcp_tap_window_update(conn, ntohs(th->window));
 
-		tcp_buf_data_from_sock(c, conn);
+		tcp_data_from_sock(c, conn);
 
 		if (p->count - idx == 1)
 			return 1;
@@ -2093,7 +2113,7 @@ int tcp_tap_handler(struct ctx *c, uint8_t pif, sa_family_t af,
 	if ((conn->events & TAP_FIN_RCVD) && !(conn->events & SOCK_FIN_SENT)) {
 		shutdown(conn->sock, SHUT_WR);
 		conn_event(c, conn, SOCK_FIN_SENT);
-		tcp_buf_send_flag(c, conn, ACK);
+		tcp_send_flag(c, conn, ACK);
 		ack_due = 0;
 	}
 
@@ -2127,7 +2147,7 @@ static void tcp_connect_finish(struct ctx *c, struct tcp_tap_conn *conn)
 		return;
 	}
 
-	if (tcp_buf_send_flag(c, conn, SYN | ACK))
+	if (tcp_send_flag(c, conn, SYN | ACK))
 		return;
 
 	conn_event(c, conn, TAP_SYN_ACK_SENT);
@@ -2195,7 +2215,7 @@ static void tcp_tap_conn_from_sock(struct ctx *c, in_port_t dstport,
 
 	conn->wnd_from_tap = WINDOW_DEFAULT;
 
-	tcp_buf_send_flag(c, conn, SYN);
+	tcp_send_flag(c, conn, SYN);
 	conn_flag(c, conn, ACK_FROM_TAP_DUE);
 
 	tcp_get_sndbuf(conn);
@@ -2284,7 +2304,7 @@ void tcp_timer_handler(struct ctx *c, union epoll_ref ref)
 		return;
 
 	if (conn->flags & ACK_TO_TAP_DUE) {
-		tcp_buf_send_flag(c, conn, ACK_IF_NEEDED);
+		tcp_send_flag(c, conn, ACK_IF_NEEDED);
 		tcp_timer_ctl(c, conn);
 	} else if (conn->flags & ACK_FROM_TAP_DUE) {
 		if (!(conn->events & ESTABLISHED)) {
@@ -2300,7 +2320,7 @@ void tcp_timer_handler(struct ctx *c, union epoll_ref ref)
 			flow_dbg(conn, "ACK timeout, retry");
 			conn->retrans++;
 			conn->seq_to_tap = conn->seq_ack_from_tap;
-			tcp_buf_data_from_sock(c, conn);
+			tcp_data_from_sock(c, conn);
 			tcp_timer_ctl(c, conn);
 		}
 	} else {
@@ -2355,7 +2375,7 @@ void tcp_sock_handler(struct ctx *c, union epoll_ref ref, uint32_t events)
 			conn_event(c, conn, SOCK_FIN_RCVD);
 
 		if (events & EPOLLIN)
-			tcp_buf_data_from_sock(c, conn);
+			tcp_data_from_sock(c, conn);
 
 		if (events & EPOLLOUT)
 			tcp_update_seqack_wnd(c, conn, 0, NULL);

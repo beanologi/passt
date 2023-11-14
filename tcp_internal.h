@@ -35,6 +35,8 @@
 #define CONN_V4(conn)		(!!inany_v4(&(conn)->faddr))
 #define CONN_V6(conn)		(!CONN_V4(conn))
 
+extern char tcp_buf_discard[MAX_WINDOW];
+
 void conn_flag_do(const struct ctx *c, struct tcp_tap_conn *conn,
 		  unsigned long flag);
 #define conn_flag(c, conn, flag)					\
