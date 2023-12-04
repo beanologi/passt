@@ -352,7 +352,7 @@
 #define ACK		(1 << 4)
 /* Flags for internal usage */
 #define DUP_ACK		(1 << 5)
-#define ACK_IF_NEEDED	0		/* See tcp_send_flag() */
+#define ACK_IF_NEEDED	0		/* See tcp_buf_send_flag() */
 
 #define OPT_EOL		0
 #define OPT_NOP		1
@@ -880,21 +880,21 @@ static void tcp_update_check_tcp6(struct ipv6hdr *ip6h, struct tcphdr *th)
 }
 
 /**
- * tcp_update_l2_buf() - Update L2 buffers with Ethernet and IPv4 addresses
+ * tcp_buf_update_l2() - Update L2 buffers with Ethernet and IPv4 addresses
  * @eth_d:	Ethernet destination address, NULL if unchanged
  * @eth_s:	Ethernet source address, NULL if unchanged
  */
-void tcp_update_l2_buf(const unsigned char *eth_d, const unsigned char *eth_s)
+void tcp_buf_update_l2(const unsigned char *eth_d, const unsigned char *eth_s)
 {
 	eth_update_mac(&tcp4_eth_src, eth_d, eth_s);
 	eth_update_mac(&tcp6_eth_src, eth_d, eth_s);
 }
 
 /**
- * tcp_sock4_iov_init() - Initialise scatter-gather L2 buffers for IPv4 sockets
+ * tcp_buf_sock4_iov_init() - Initialise scatter-gather L2 buffers for IPv4 sockets
  * @c:		Execution context
  */
-static void tcp_sock4_iov_init(const struct ctx *c)
+static void tcp_buf_sock4_iov_init(const struct ctx *c)
 {
 	struct iphdr iph = L2_BUF_IP4_INIT(IPPROTO_TCP);
 	int i;
@@ -936,10 +936,10 @@ static void tcp_sock4_iov_init(const struct ctx *c)
 }
 
 /**
- * tcp_sock6_iov_init() - Initialise scatter-gather L2 buffers for IPv6 sockets
+ * tcp_buf_sock6_iov_init() - Initialise scatter-gather L2 buffers for IPv6 sockets
  * @c:		Execution context
  */
-static void tcp_sock6_iov_init(const struct ctx *c)
+static void tcp_buf_sock6_iov_init(const struct ctx *c)
 {
 	struct ipv6hdr ip6 = L2_BUF_IP6_INIT(IPPROTO_TCP);
 	int i;
@@ -1213,10 +1213,10 @@ static void tcp_rst_do(struct ctx *c, struct tcp_tap_conn *conn);
 	} while (0)
 
 /**
- * tcp_l2_flags_buf_flush() - Send out buffers for segments with no data (flags)
+ * tcp_buf_l2_flags_flush() - Send out buffers for segments with no data (flags)
  * @c:		Execution context
  */
-static void tcp_l2_flags_buf_flush(const struct ctx *c)
+static void tcp_buf_l2_flags_flush(const struct ctx *c)
 {
 	tap_send_iov(c, tcp6_l2_flags_iov, tcp6_l2_flags_buf_used);
 	tcp6_l2_flags_buf_used = 0;
@@ -1226,10 +1226,10 @@ static void tcp_l2_flags_buf_flush(const struct ctx *c)
 }
 
 /**
- * tcp_l2_data_buf_flush() - Send out buffers for segments with data
+ * tcp_buf_l2_data_flush() - Send out buffers for segments with data
  * @c:		Execution context
  */
-static void tcp_l2_data_buf_flush(const struct ctx *c)
+static void tcp_buf_l2_data_flush(const struct ctx *c)
 {
 	unsigned i;
 	size_t m;
@@ -1252,8 +1252,8 @@ static void tcp_l2_data_buf_flush(const struct ctx *c)
 /* cppcheck-suppress [constParameterPointer, unmatchedSuppression] */
 void tcp_defer_handler(struct ctx *c)
 {
-	tcp_l2_flags_buf_flush(c);
-	tcp_l2_data_buf_flush(c);
+	tcp_buf_l2_flags_flush(c);
+	tcp_buf_l2_data_flush(c);
 }
 
 /**
@@ -1578,7 +1578,7 @@ static int tcp_fill_flag_header(struct ctx *c, struct tcp_tap_conn *conn,
 	return 1;
 }
 
-static int tcp_send_flag(struct ctx *c, struct tcp_tap_conn *conn, int flags)
+static int tcp_buf_send_flag(struct ctx *c, struct tcp_tap_conn *conn, int flags)
 {
 	struct tcp_l2_flags_t *payload;
 	struct iovec *dup_iov;
@@ -1631,13 +1631,13 @@ static int tcp_send_flag(struct ctx *c, struct tcp_tap_conn *conn, int flags)
 			tcp4_l2_flags_buf_used++;
 
 		if (tcp4_l2_flags_buf_used > TCP_FRAMES_MEM - 2)
-			tcp_l2_flags_buf_flush(c);
+			tcp_buf_l2_flags_flush(c);
 	} else {
 		if (flags & DUP_ACK)
 			tcp6_l2_flags_buf_used++;
 
 		if (tcp6_l2_flags_buf_used > TCP_FRAMES_MEM - 2)
-			tcp_l2_flags_buf_flush(c);
+			tcp_buf_l2_flags_flush(c);
 	}
 
 	return 0;
@@ -1653,7 +1653,7 @@ static void tcp_rst_do(struct ctx *c, struct tcp_tap_conn *conn)
 	if (conn->events == CLOSED)
 		return;
 
-	if (!tcp_send_flag(c, conn, RST))
+	if (!tcp_buf_send_flag(c, conn, RST))
 		conn_event(c, conn, CLOSED);
 }
 
@@ -2022,7 +2022,7 @@ static void tcp_conn_from_tap(struct ctx *c, sa_family_t af,
 	} else {
 		tcp_get_sndbuf(conn);
 
-		if (tcp_send_flag(c, conn, SYN | ACK))
+		if (tcp_buf_send_flag(c, conn, SYN | ACK))
 			return;
 
 		conn_event(c, conn, TAP_SYN_ACK_SENT);
@@ -2103,7 +2103,7 @@ static void tcp_data_to_tap(const struct ctx *c, struct tcp_tap_conn *conn,
 						plen, check, seq);
 
 		if (tcp4_l2_buf_used > TCP_FRAMES_MEM - 1)
-			tcp_l2_data_buf_flush(c);
+			tcp_buf_l2_data_flush(c);
 	} else if (CONN_V6(conn)) {
 		tcp6_l2_buf_seq_update[tcp6_l2_buf_used].seq = seq_update;
 		tcp6_l2_buf_seq_update[tcp6_l2_buf_used].len = plen;
@@ -2115,12 +2115,12 @@ static void tcp_data_to_tap(const struct ctx *c, struct tcp_tap_conn *conn,
 						plen, seq);
 
 		if (tcp6_l2_buf_used > TCP_FRAMES_MEM - 1)
-			tcp_l2_data_buf_flush(c);
+			tcp_buf_l2_data_flush(c);
 	}
 }
 
 /**
- * tcp_data_from_sock() - Handle new data from socket, queue to tap, in window
+ * tcp_buf_data_from_sock() - Handle new data from socket, queue to tap, in window
  * @c:		Execution context
  * @conn:	Connection pointer
  *
@@ -2128,7 +2128,7 @@ static void tcp_data_to_tap(const struct ctx *c, struct tcp_tap_conn *conn,
  *
  * #syscalls recvmsg
  */
-static int tcp_data_from_sock(struct ctx *c, struct tcp_tap_conn *conn)
+static int tcp_buf_data_from_sock(struct ctx *c, struct tcp_tap_conn *conn)
 {
 	uint32_t wnd_scaled = conn->wnd_from_tap << conn->ws_from_tap;
 	int fill_bufs, send_bufs = 0, last_len, iov_rem = 0;
@@ -2172,7 +2172,7 @@ static int tcp_data_from_sock(struct ctx *c, struct tcp_tap_conn *conn)
 
 	if (( v4 && tcp4_l2_buf_used + fill_bufs > TCP_FRAMES_MEM) ||
 	    (!v4 && tcp6_l2_buf_used + fill_bufs > TCP_FRAMES_MEM)) {
-		tcp_l2_data_buf_flush(c);
+		tcp_buf_l2_data_flush(c);
 
 		/* Silence Coverity CWE-125 false positive */
 		tcp4_l2_buf_used = tcp6_l2_buf_used = 0;
@@ -2198,7 +2198,7 @@ static int tcp_data_from_sock(struct ctx *c, struct tcp_tap_conn *conn)
 
 	if (!len) {
 		if ((conn->events & (SOCK_FIN_RCVD | TAP_FIN_SENT)) == SOCK_FIN_RCVD) {
-			if ((ret = tcp_send_flag(c, conn, FIN | ACK))) {
+			if ((ret = tcp_buf_send_flag(c, conn, FIN | ACK))) {
 				tcp_rst(c, conn);
 				return ret;
 			}
@@ -2380,7 +2380,7 @@ static int tcp_data_from_tap(struct ctx *c, struct tcp_tap_conn *conn,
 			   "fast re-transmit, ACK: %u, previous sequence: %u",
 			   max_ack_seq, conn->seq_to_tap);
 		conn->seq_to_tap = max_ack_seq;
-		tcp_data_from_sock(c, conn);
+		tcp_buf_data_from_sock(c, conn);
 	}
 
 	if (!iov_i)
@@ -2396,14 +2396,14 @@ eintr:
 			 *   Then swiftly looked away and left.
 			 */
 			conn->seq_from_tap = seq_from_tap;
-			tcp_send_flag(c, conn, ACK);
+			tcp_buf_send_flag(c, conn, ACK);
 		}
 
 		if (errno == EINTR)
 			goto eintr;
 
 		if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			tcp_send_flag(c, conn, ACK_IF_NEEDED);
+			tcp_buf_send_flag(c, conn, ACK_IF_NEEDED);
 			return p->count - idx;
 
 		}
@@ -2413,7 +2413,7 @@ eintr:
 	if (n < (int)(seq_from_tap - conn->seq_from_tap)) {
 		partial_send = 1;
 		conn->seq_from_tap += n;
-		tcp_send_flag(c, conn, ACK_IF_NEEDED);
+		tcp_buf_send_flag(c, conn, ACK_IF_NEEDED);
 	} else {
 		conn->seq_from_tap += n;
 	}
@@ -2426,7 +2426,7 @@ out:
 		 */
 		if (conn->seq_dup_ack_approx != (conn->seq_from_tap & 0xff)) {
 			conn->seq_dup_ack_approx = conn->seq_from_tap & 0xff;
-			tcp_send_flag(c, conn, DUP_ACK);
+			tcp_buf_send_flag(c, conn, DUP_ACK);
 		}
 		return p->count - idx;
 	}
@@ -2440,7 +2440,7 @@ out:
 
 		conn_event(c, conn, TAP_FIN_RCVD);
 	} else {
-		tcp_send_flag(c, conn, ACK_IF_NEEDED);
+		tcp_buf_send_flag(c, conn, ACK_IF_NEEDED);
 	}
 
 	return p->count - idx;
@@ -2476,8 +2476,8 @@ static void tcp_conn_from_sock_finish(struct ctx *c, struct tcp_tap_conn *conn,
 	/* The client might have sent data already, which we didn't
 	 * dequeue waiting for SYN,ACK from tap -- check now.
 	 */
-	tcp_data_from_sock(c, conn);
-	tcp_send_flag(c, conn, ACK);
+	tcp_buf_data_from_sock(c, conn);
+	tcp_buf_send_flag(c, conn, ACK);
 }
 
 /**
@@ -2557,7 +2557,7 @@ int tcp_tap_handler(struct ctx *c, uint8_t pif, sa_family_t af,
 			conn->seq_from_tap++;
 
 			shutdown(conn->sock, SHUT_WR);
-			tcp_send_flag(c, conn, ACK);
+			tcp_buf_send_flag(c, conn, ACK);
 			conn_event(c, conn, SOCK_FIN_SENT);
 
 			return 1;
@@ -2568,7 +2568,7 @@ int tcp_tap_handler(struct ctx *c, uint8_t pif, sa_family_t af,
 
 		tcp_tap_window_update(conn, ntohs(th->window));
 
-		tcp_data_from_sock(c, conn);
+		tcp_buf_data_from_sock(c, conn);
 
 		if (p->count - idx == 1)
 			return 1;
@@ -2598,7 +2598,7 @@ int tcp_tap_handler(struct ctx *c, uint8_t pif, sa_family_t af,
 	if ((conn->events & TAP_FIN_RCVD) && !(conn->events & SOCK_FIN_SENT)) {
 		shutdown(conn->sock, SHUT_WR);
 		conn_event(c, conn, SOCK_FIN_SENT);
-		tcp_send_flag(c, conn, ACK);
+		tcp_buf_send_flag(c, conn, ACK);
 		ack_due = 0;
 	}
 
@@ -2632,7 +2632,7 @@ static void tcp_connect_finish(struct ctx *c, struct tcp_tap_conn *conn)
 		return;
 	}
 
-	if (tcp_send_flag(c, conn, SYN | ACK))
+	if (tcp_buf_send_flag(c, conn, SYN | ACK))
 		return;
 
 	conn_event(c, conn, TAP_SYN_ACK_SENT);
@@ -2700,7 +2700,7 @@ static void tcp_tap_conn_from_sock(struct ctx *c, in_port_t dstport,
 
 	conn->wnd_from_tap = WINDOW_DEFAULT;
 
-	tcp_send_flag(c, conn, SYN);
+	tcp_buf_send_flag(c, conn, SYN);
 	conn_flag(c, conn, ACK_FROM_TAP_DUE);
 
 	tcp_get_sndbuf(conn);
@@ -2789,7 +2789,7 @@ void tcp_timer_handler(struct ctx *c, union epoll_ref ref)
 		return;
 
 	if (conn->flags & ACK_TO_TAP_DUE) {
-		tcp_send_flag(c, conn, ACK_IF_NEEDED);
+		tcp_buf_send_flag(c, conn, ACK_IF_NEEDED);
 		tcp_timer_ctl(c, conn);
 	} else if (conn->flags & ACK_FROM_TAP_DUE) {
 		if (!(conn->events & ESTABLISHED)) {
@@ -2805,7 +2805,7 @@ void tcp_timer_handler(struct ctx *c, union epoll_ref ref)
 			flow_dbg(conn, "ACK timeout, retry");
 			conn->retrans++;
 			conn->seq_to_tap = conn->seq_ack_from_tap;
-			tcp_data_from_sock(c, conn);
+			tcp_buf_data_from_sock(c, conn);
 			tcp_timer_ctl(c, conn);
 		}
 	} else {
@@ -2860,7 +2860,7 @@ void tcp_sock_handler(struct ctx *c, union epoll_ref ref, uint32_t events)
 			conn_event(c, conn, SOCK_FIN_RCVD);
 
 		if (events & EPOLLIN)
-			tcp_data_from_sock(c, conn);
+			tcp_buf_data_from_sock(c, conn);
 
 		if (events & EPOLLOUT)
 			tcp_update_seqack_wnd(c, conn, 0, NULL);
@@ -3102,10 +3102,10 @@ int tcp_init(struct ctx *c)
 		tc_hash[b] = FLOW_SIDX_NONE;
 
 	if (c->ifi4)
-		tcp_sock4_iov_init(c);
+		tcp_buf_sock4_iov_init(c);
 
 	if (c->ifi6)
-		tcp_sock6_iov_init(c);
+		tcp_buf_sock6_iov_init(c);
 
 	memset(init_sock_pool4,		0xff,	sizeof(init_sock_pool4));
 	memset(init_sock_pool6,		0xff,	sizeof(init_sock_pool6));
