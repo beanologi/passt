@@ -120,9 +120,7 @@
 #include "tap.h"
 #include "pcap.h"
 #include "log.h"
-
-#define UDP_CONN_TIMEOUT	180 /* s, timeout for ephemeral or local bind */
-#define UDP_MAX_FRAMES		32  /* max # of frames to receive at once */
+#include "udp_internal.h"
 
 /**
  * struct udp_tap_port - Port tracking based on tap-facing source port
@@ -230,11 +228,11 @@ static struct mmsghdr	udp6_l2_mh_sock		[UDP_MAX_FRAMES];
 static struct iovec	udp4_iov_splice		[UDP_MAX_FRAMES];
 static struct iovec	udp6_iov_splice		[UDP_MAX_FRAMES];
 
-static struct sockaddr_in udp4_localname = {
+struct sockaddr_in udp4_localname = {
 	.sin_family = AF_INET,
 	.sin_addr = IN4ADDR_LOOPBACK_INIT,
 };
-static struct sockaddr_in6 udp6_localname = {
+struct sockaddr_in6 udp6_localname = {
 	.sin6_family = AF_INET6,
 	.sin6_addr = IN6ADDR_LOOPBACK_INIT,
 };
@@ -567,9 +565,9 @@ static void udp_splice_sendfrom(const struct ctx *c, unsigned start, unsigned n,
  *
  * Return: size of tap frame with headers
  */
-static size_t udp_update_hdr4(const struct ctx *c, struct iphdr *iph,
-			      size_t data_len, struct sockaddr_in *s_in,
-			      in_port_t dstport, const struct timespec *now)
+size_t udp_update_hdr4(const struct ctx *c, struct iphdr *iph,
+		       size_t data_len, struct sockaddr_in *s_in,
+		       in_port_t dstport, const struct timespec *now)
 {
 	struct udphdr *uh = (struct udphdr *)(iph + 1);
 	const struct in_addr *src;
@@ -608,6 +606,7 @@ static size_t udp_update_hdr4(const struct ctx *c, struct iphdr *iph,
 	uh->source = s_in->sin_port;
 	uh->dest = htons(dstport);
 	uh->len = htons(data_len + sizeof(struct udphdr));
+	uh->check = 0;
 
 	return ip_len;
 }
@@ -621,9 +620,9 @@ static size_t udp_update_hdr4(const struct ctx *c, struct iphdr *iph,
  *
  * Return: size of tap frame with headers
  */
-static size_t udp_update_hdr6(const struct ctx *c, struct ipv6hdr *ip6h,
-			      size_t data_len, struct sockaddr_in6 *s_in6,
-			      in_port_t dstport, const struct timespec *now)
+size_t udp_update_hdr6(const struct ctx *c, struct ipv6hdr *ip6h,
+		       size_t data_len, struct sockaddr_in6 *s_in6,
+		       in_port_t dstport, const struct timespec *now)
 {
 	struct udphdr *uh = (struct udphdr *)(ip6h + 1);
 	const struct in6_addr *src, *dst;
@@ -681,7 +680,7 @@ static size_t udp_update_hdr6(const struct ctx *c, struct ipv6hdr *ip6h,
 	uh->dest = htons(dstport);
 	uh->len = ip6h->payload_len;
 	uh->check = 0;
-	if (c->mode != MODE_VU || *c->pcap)
+	if (c->mode != MODE_VU)
 		uh->check = csum(uh, payload_len,
 				 proto_ipv6_header_psum(payload_len, IPPROTO_UDP,
 							src, dst));

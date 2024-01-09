@@ -42,6 +42,7 @@ union epoll_ref;
 #include "fwd.h"
 #include "tcp.h"
 #include "udp.h"
+#include "udp_vu.h"
 #include "vhost_user.h"
 
 /**

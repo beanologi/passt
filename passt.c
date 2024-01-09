@@ -383,7 +383,10 @@ loop:
 			tcp_timer_handler(&c, ref);
 			break;
 		case EPOLL_TYPE_UDP:
-			udp_buf_sock_handler(&c, ref, eventmask, &now);
+			if (c.mode == MODE_VU)
+				udp_vu_sock_handler(&c, ref, eventmask, &now);
+			else
+				udp_buf_sock_handler(&c, ref, eventmask, &now);
 			break;
 		case EPOLL_TYPE_ICMP:
 			icmp_sock_handler(&c, AF_INET, ref);
