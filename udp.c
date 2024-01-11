@@ -567,21 +567,22 @@ static void udp_splice_sendfrom(const struct ctx *c, unsigned start, unsigned n,
  *
  * Return: size of tap frame with headers
  */
-static size_t udp_update_hdr4(const struct ctx *c, int n, in_port_t dstport,
-			      const struct timespec *now)
+static size_t udp_update_hdr4(const struct ctx *c, struct iphdr *iph,
+			      size_t data_len, struct sockaddr_in *s_in,
+			      in_port_t dstport, const struct timespec *now)
 {
-	struct udp4_l2_buf_t *b = &udp4_l2_buf[n];
+	struct udphdr *uh = (struct udphdr *)(iph + 1);
 	const struct in_addr *src;
 	in_port_t src_port;
 	size_t ip_len;
 
-	ip_len = udp4_l2_mh_sock[n].msg_len + sizeof(b->iph) + sizeof(b->uh);
+	ip_len = data_len + sizeof(struct iphdr) + sizeof(struct udphdr);
 
-	b->iph.tot_len = htons(ip_len);
-	b->iph.daddr = c->ip4.addr_seen.s_addr;
+	iph->tot_len = htons(ip_len);
+	iph->daddr = c->ip4.addr_seen.s_addr;
 
-	src = &b->s_in.sin_addr;
-	src_port = ntohs(b->s_in.sin_port);
+	src = &s_in->sin_addr;
+	src_port = ntohs(s_in->sin_port);
 
 	if (!IN4_IS_ADDR_UNSPECIFIED(&c->ip4.dns_match) &&
 	    IN4_ARE_ADDR_EQUAL(src, &c->ip4.dns_host) && src_port == 53) {
@@ -600,15 +601,15 @@ static size_t udp_update_hdr4(const struct ctx *c, int n, in_port_t dstport,
 
 		src = &c->ip4.gw;
 	}
-	b->iph.saddr = src->s_addr;
+	iph->saddr = src->s_addr;
 
-	b->iph.check = csum_ip4_header(b->iph.tot_len, IPPROTO_UDP,
-				       *src, c->ip4.addr_seen);
-	b->uh.source = b->s_in.sin_port;
-	b->uh.dest = htons(dstport);
-	b->uh.len = htons(udp4_l2_mh_sock[n].msg_len + sizeof(b->uh));
+	iph->check = csum_ip4_header(iph->tot_len, IPPROTO_UDP,
+				     *src, c->ip4.addr_seen);
+	uh->source = s_in->sin_port;
+	uh->dest = htons(dstport);
+	uh->len = htons(data_len + sizeof(struct udphdr));
 
-	return tap_iov_len(c, &b->taph, ip_len);
+	return ip_len;
 }
 
 /**
@@ -620,23 +621,24 @@ static size_t udp_update_hdr4(const struct ctx *c, int n, in_port_t dstport,
  *
  * Return: size of tap frame with headers
  */
-static size_t udp_update_hdr6(const struct ctx *c, int n, in_port_t dstport,
-			      const struct timespec *now)
+static size_t udp_update_hdr6(const struct ctx *c, struct ipv6hdr *ip6h,
+			      size_t data_len, struct sockaddr_in6 *s_in6,
+			      in_port_t dstport, const struct timespec *now)
 {
-	struct udp6_l2_buf_t *b = &udp6_l2_buf[n];
+	struct udphdr *uh = (struct udphdr *)(ip6h + 1);
 	const struct in6_addr *src, *dst;
 	uint16_t payload_len;
 	in_port_t src_port;
 	size_t ip_len;
 
 	dst = &c->ip6.addr_seen;
-	src = &b->s_in6.sin6_addr;
-	src_port = ntohs(b->s_in6.sin6_port);
+	src = &s_in6->sin6_addr;
+	src_port = ntohs(s_in6->sin6_port);
 
-	ip_len = udp6_l2_mh_sock[n].msg_len + sizeof(b->ip6h) + sizeof(b->uh);
+	ip_len = data_len + sizeof(struct ipv6hdr) + sizeof(struct udphdr);
 
-	payload_len = udp6_l2_mh_sock[n].msg_len + sizeof(b->uh);
-	b->ip6h.payload_len = htons(payload_len);
+	payload_len = data_len + sizeof(struct udphdr);
+	ip6h->payload_len = htons(payload_len);
 
 	if (IN6_IS_ADDR_LINKLOCAL(src)) {
 		dst = &c->ip6.addr_ll_seen;
@@ -668,23 +670,22 @@ static size_t udp_update_hdr6(const struct ctx *c, int n, in_port_t dstport,
 			src = &c->ip6.gw;
 		else
 			src = &c->ip6.addr_ll;
-
 	}
-	b->ip6h.daddr = *dst;
-	b->ip6h.saddr = *src;
-	b->ip6h.version = 6;
-	b->ip6h.nexthdr = IPPROTO_UDP;
-	b->ip6h.hop_limit = 255;
+	ip6h->daddr = *dst;
+	ip6h->saddr = *src;
+	ip6h->version = 6;
+	ip6h->nexthdr = IPPROTO_UDP;
+	ip6h->hop_limit = 255;
 
-	b->uh.source = b->s_in6.sin6_port;
-	b->uh.dest = htons(dstport);
-	b->uh.len = b->ip6h.payload_len;
-	b->uh.check = 0;
-	b->uh.check = csum(&b->uh, payload_len,
-			   proto_ipv6_header_psum(payload_len, IPPROTO_UDP,
-						  src, dst));
+	uh->source = s_in6->sin6_port;
+	uh->dest = htons(dstport);
+	uh->len = ip6h->payload_len;
+	uh->check = 0;
+	uh->check = csum(uh, payload_len,
+			 proto_ipv6_header_psum(payload_len, IPPROTO_UDP,
+						src, dst));
 
-	return tap_iov_len(c, &b->taph, ip_len);
+	return ip_len;
 }
 
 /**
@@ -698,6 +699,11 @@ static size_t udp_update_hdr6(const struct ctx *c, int n, in_port_t dstport,
  *
  * Return: size of tap frame with headers
  */
+#pragma GCC diagnostic push
+/* ignore unaligned pointer value warning for &udp6_l2_buf[i].ip6h and
+ * &udp4_l2_buf[i].iph
+ */
+#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
 static void udp_tap_send(const struct ctx *c,
 			 unsigned int start, unsigned int n,
 			 in_port_t dstport, bool v6, const struct timespec *now)
@@ -711,18 +717,31 @@ static void udp_tap_send(const struct ctx *c,
 		tap_iov = udp4_l2_iov_tap;
 
 	for (i = start; i < start + n; i++) {
-		size_t buf_len;
+		size_t ip_len;
 
-		if (v6)
-			buf_len = udp_update_hdr6(c, i, dstport, now);
-		else
-			buf_len = udp_update_hdr4(c, i, dstport, now);
+		if (v6) {
+			ip_len = udp_update_hdr6(c, &udp6_l2_buf[i].ip6h,
+						 udp6_l2_mh_sock[i].msg_len,
+						 &udp6_l2_buf[i].s_in6, dstport,
+						 now);
+			tap_iov[i].iov_len = tap_iov_len(c,
+							 &udp6_l2_buf[i].taph,
+							 ip_len);
+		} else {
+			ip_len = udp_update_hdr4(c, &udp4_l2_buf[i].iph,
+						 udp4_l2_mh_sock[i].msg_len,
+						 &udp4_l2_buf[i].s_in,
+						 dstport, now);
 
-		tap_iov[i].iov_len = buf_len;
+			tap_iov[i].iov_len = tap_iov_len(c,
+							 &udp4_l2_buf[i].taph,
+							 ip_len);
+		}
 	}
 
 	tap_send_frames(c, tap_iov + start, n);
 }
+#pragma GCC diagnostic pop
 
 /**
  * udp_sock_handler() - Handle new data from socket
