@@ -380,7 +380,7 @@ loop:
 			tcp_timer_handler(&c, ref);
 			break;
 		case EPOLL_TYPE_UDP:
-			udp_sock_handler(&c, ref, eventmask, &now);
+			udp_buf_sock_handler(&c, ref, eventmask, &now);
 			break;
 		case EPOLL_TYPE_ICMP:
 			icmp_sock_handler(&c, AF_INET, ref);

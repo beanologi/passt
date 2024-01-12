@@ -744,7 +744,7 @@ static void udp_tap_send(const struct ctx *c,
 #pragma GCC diagnostic pop
 
 /**
- * udp_sock_handler() - Handle new data from socket
+ * udp_buf_sock_handler() - Handle new data from socket
  * @c:		Execution context
  * @ref:	epoll reference
  * @events:	epoll events bitmap
@@ -752,8 +752,8 @@ static void udp_tap_send(const struct ctx *c,
  *
  * #syscalls recvmmsg
  */
-void udp_sock_handler(const struct ctx *c, union epoll_ref ref, uint32_t events,
-		      const struct timespec *now)
+void udp_buf_sock_handler(const struct ctx *c, union epoll_ref ref, uint32_t events,
+			  const struct timespec *now)
 {
 	/* For not entirely clear reasons (data locality?) pasta gets
 	 * better throughput if we receive tap datagrams one at a
