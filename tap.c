@@ -477,8 +477,7 @@ size_t tap_send_frames(const struct ctx *c, const struct iovec *iov, size_t n)
 		m = tap_send_frames_passt(c, iov, n);
 		break;
 	case MODE_VU:
-		m = tap_send_frames_vu(c, iov, n);
-		break;
+		ASSERT(0);
 	default:
 		m = 0;
 		break;

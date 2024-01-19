@@ -129,8 +129,6 @@ static inline bool vu_queue_started(const VuVirtq *vq)
 	return vq->started;
 }
 
-size_t tap_send_frames_vu(const struct ctx *c, const struct iovec *iov,
-			  size_t n);
 int vu_send(const struct ctx *c, const void *data, size_t len);
 void vu_print_capabilities(void);
 void vu_init(struct ctx *c);

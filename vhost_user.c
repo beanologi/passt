@@ -653,22 +653,6 @@ err:
 	return offset;
 }
 
-size_t tap_send_frames_vu(const struct ctx *c, const struct iovec *iov, size_t n)
-{
-	size_t i;
-	int ret;
-
-	debug("tap_send_frames_vu n %zd", n);
-
-	for (i = 0; i < n; i++) {
-		ret = vu_send(c, iov[i].iov_base, iov[i].iov_len);
-		if (ret < 0)
-			break;
-	}
-	debug("count %zd", i);
-	return i;
-}
-
 static void vu_handle_tx(VuDev *vdev, int index)
 {
 	struct ctx *c = (struct ctx *) ((char *)vdev - offsetof(struct ctx, vdev));
