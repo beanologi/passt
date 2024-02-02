@@ -98,5 +98,12 @@ void tap_handler_pasta(struct ctx *c, uint32_t events,
 void tap_handler_passt(struct ctx *c, uint32_t events,
 		       const struct timespec *now);
 void tap_sock_init(struct ctx *c);
+void pool_flush_all(void);
+void tap_handler_all(struct ctx *c, const struct timespec *now);
+
+void packet_add_do(struct pool *p, size_t len, const char *start,
+		   const char *func, int line);
+#define packet_add_all(p, len, start)					\
+	packet_add_all_do(p, len, start, __func__, __LINE__)
 
 #endif /* TAP_H */

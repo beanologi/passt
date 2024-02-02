@@ -1011,6 +1011,45 @@ append:
 	return in->count;
 }
 
+void pool_flush_all(void)
+{
+	pool_flush(pool_tap4);
+	pool_flush(pool_tap6);
+}
+
+void tap_handler_all(struct ctx *c, const struct timespec *now)
+{
+	tap4_handler(c, pool_tap4, now);
+	tap6_handler(c, pool_tap6, now);
+}
+
+void packet_add_all_do(struct ctx *c, ssize_t len, char *p,
+		       const char *func, int line)
+{
+	const struct ethhdr *eh;
+
+	pcap(p, len);
+
+	eh = (struct ethhdr *)p;
+
+	if (memcmp(c->mac_guest, eh->h_source, ETH_ALEN)) {
+		memcpy(c->mac_guest, eh->h_source, ETH_ALEN);
+		proto_update_l2_buf(c->mac_guest, NULL);
+	}
+
+	switch (ntohs(eh->h_proto)) {
+	case ETH_P_ARP:
+	case ETH_P_IP:
+		packet_add_do(pool_tap4, len, p, func, line);
+		break;
+	case ETH_P_IPV6:
+		packet_add_do(pool_tap6, len, p, func, line);
+		break;
+	default:
+		break;
+	}
+}
+
 /**
  * tap_sock_reset() - Handle closing or failure of connect AF_UNIX socket
  * @c:		Execution context
@@ -1037,7 +1076,6 @@ static void tap_sock_reset(struct ctx *c)
 void tap_handler_passt(struct ctx *c, uint32_t events,
 		       const struct timespec *now)
 {
-	const struct ethhdr *eh;
 	ssize_t n, rem;
 	char *p;
 
@@ -1050,8 +1088,7 @@ redo:
 	p = pkt_buf;
 	rem = 0;
 
-	pool_flush(pool_tap4);
-	pool_flush(pool_tap6);
+	pool_flush_all();
 
 	n = recv(c->fd_tap, p, TAP_BUF_FILL, MSG_DONTWAIT);
 	if (n < 0) {
@@ -1078,37 +1115,18 @@ redo:
 		/* Complete the partial read above before discarding a malformed
 		 * frame, otherwise the stream will be inconsistent.
 		 */
-		if (len < (ssize_t)sizeof(*eh) || len > (ssize_t)ETH_MAX_MTU)
+		if (len < (ssize_t)sizeof(struct ethhdr) ||
+		    len > (ssize_t)ETH_MAX_MTU)
 			goto next;
 
-		pcap(p, len);
-
-		eh = (struct ethhdr *)p;
-
-		if (memcmp(c->mac_guest, eh->h_source, ETH_ALEN)) {
-			memcpy(c->mac_guest, eh->h_source, ETH_ALEN);
-			proto_update_l2_buf(c->mac_guest, NULL);
-		}
-
-		switch (ntohs(eh->h_proto)) {
-		case ETH_P_ARP:
-		case ETH_P_IP:
-			packet_add(pool_tap4, len, p);
-			break;
-		case ETH_P_IPV6:
-			packet_add(pool_tap6, len, p);
-			break;
-		default:
-			break;
-		}
+		packet_add_all(c, len, p);
 
 next:
 		p += len;
 		n -= len;
 	}
 
-	tap4_handler(c, pool_tap4, now);
-	tap6_handler(c, pool_tap6, now);
+	tap_handler_all(c, now);
 
 	/* We can't use EPOLLET otherwise. */
 	if (rem)
@@ -1133,35 +1151,18 @@ void tap_handler_pasta(struct ctx *c, uint32_t events,
 redo:
 	n = 0;
 
-	pool_flush(pool_tap4);
-	pool_flush(pool_tap6);
+	pool_flush_all();
 restart:
 	while ((len = read(c->fd_tap, pkt_buf + n, TAP_BUF_BYTES - n)) > 0) {
-		const struct ethhdr *eh = (struct ethhdr *)(pkt_buf + n);
 
-		if (len < (ssize_t)sizeof(*eh) || len > (ssize_t)ETH_MAX_MTU) {
+		if (len < (ssize_t)sizeof(struct ethhdr) ||
+		    len > (ssize_t)ETH_MAX_MTU) {
 			n += len;
 			continue;
 		}
 
-		pcap(pkt_buf + n, len);
 
-		if (memcmp(c->mac_guest, eh->h_source, ETH_ALEN)) {
-			memcpy(c->mac_guest, eh->h_source, ETH_ALEN);
-			proto_update_l2_buf(c->mac_guest, NULL);
-		}
-
-		switch (ntohs(eh->h_proto)) {
-		case ETH_P_ARP:
-		case ETH_P_IP:
-			packet_add(pool_tap4, len, pkt_buf + n);
-			break;
-		case ETH_P_IPV6:
-			packet_add(pool_tap6, len, pkt_buf + n);
-			break;
-		default:
-			break;
-		}
+		packet_add_all(c, len, pkt_buf + n);
 
 		if ((n += len) == TAP_BUF_BYTES)
 			break;
@@ -1172,8 +1173,7 @@ restart:
 
 	ret = errno;
 
-	tap4_handler(c, pool_tap4, now);
-	tap6_handler(c, pool_tap6, now);
+	tap_handler_all(c, now);
 
 	if (len > 0 || ret == EAGAIN)
 		return;
