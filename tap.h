@@ -6,6 +6,20 @@
 #ifndef TAP_H
 #define TAP_H
 
+/*
+ * TCP frame iovec array:
+ * TCP_IOV_VNET		vnet length
+ * TCP_IOV_ETH		ethernet header
+ * TCP_IOV_IP		IP (v4/v6) header
+ * TCP_IOV_PAYLOAD	IP payload (TCP header + data)
+ * TCP_IOV_NUM is the number of entries in the iovec array
+ */
+#define TCP_IOV_VNET	0
+#define TCP_IOV_ETH	1
+#define TCP_IOV_IP	2
+#define TCP_IOV_PAYLOAD	3
+#define TCP_IOV_NUM	4
+
 /**
  * struct tap_hdr - L2 and tap specific headers
  * @vnet_len:	Frame length (for qemu socket transport)
@@ -74,6 +88,8 @@ void tap_icmp6_send(const struct ctx *c,
 		    const void *in, size_t len);
 int tap_send(const struct ctx *c, const void *data, size_t len);
 size_t tap_send_frames(const struct ctx *c, const struct iovec *iov, size_t n);
+size_t tap_send_iov(const struct ctx *c, struct iovec iov[][TCP_IOV_NUM],
+		    size_t n);
 void eth_update_mac(struct ethhdr *eh,
 		    const unsigned char *eth_d, const unsigned char *eth_s);
 void tap_listen_handler(struct ctx *c, uint32_t events);

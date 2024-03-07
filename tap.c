@@ -351,6 +351,30 @@ static size_t tap_send_frames_pasta(const struct ctx *c,
 }
 
 /**
+ * tap_send_iov_pasta() - Send out multiple prepared frames
+ * @c:		Execution context
+ * @iov:	Array of frames, each frames is divided in an array of iovecs.
+ *              The first entry of the iovec is ignored
+ * @n:		Number of frames in @iov
+ *
+ * Return: number of frames actually sent
+ */
+static size_t tap_send_iov_pasta(const struct ctx *c,
+				 struct iovec iov[][TCP_IOV_NUM], size_t n)
+{
+	unsigned int i;
+
+	for (i = 0; i < n; i++) {
+		if (!tap_send_frames_pasta(c, &iov[i][TCP_IOV_ETH],
+					   TCP_IOV_NUM - TCP_IOV_ETH))
+			break;
+	}
+
+	return i;
+
+}
+
+/**
  * tap_send_frames_passt() - Send multiple frames to the passt tap
  * @c:		Execution context
  * @iov:	Array of buffers, each containing one frame
@@ -391,6 +415,42 @@ static size_t tap_send_frames_passt(const struct ctx *c,
 }
 
 /**
+ * tap_send_iov_passt() - Send out multiple prepared frames
+ * @c:		Execution context
+ * @iov:	Array of frames, each frames is divided in an array of iovecs.
+ *              The first entry of the iovec is updated to point to an
+ *              uint32_t storing the frame length.
+ * @n:		Number of frames in @iov
+ *
+ * Return: number of frames actually sent
+ */
+static size_t tap_send_iov_passt(const struct ctx *c,
+				 struct iovec iov[][TCP_IOV_NUM],
+				 size_t n)
+{
+	unsigned int i;
+
+	for (i = 0; i < n; i++) {
+		uint32_t vnet_len;
+		int j;
+
+		vnet_len = 0;
+		for (j = TCP_IOV_ETH; j < TCP_IOV_NUM; j++)
+			vnet_len += iov[i][j].iov_len;
+
+		vnet_len = htonl(vnet_len);
+		iov[i][TCP_IOV_VNET].iov_base = &vnet_len;
+		iov[i][TCP_IOV_VNET].iov_len = sizeof(vnet_len);
+
+		if (!tap_send_frames_passt(c, iov[i], TCP_IOV_NUM))
+			break;
+	}
+
+	return i;
+
+}
+
+/**
  * tap_send_frames() - Send out multiple prepared frames
  * @c:		Execution context
  * @iov:	Array of buffers, each containing one frame (with L2 headers)
@@ -414,6 +474,50 @@ size_t tap_send_frames(const struct ctx *c, const struct iovec *iov, size_t n)
 		debug("tap: failed to send %zu frames of %zu", n - m, n);
 
 	pcap_multiple(iov, 1, n, c->mode == MODE_PASST ? sizeof(uint32_t) : 0);
+
+	return m;
+}
+
+/**
+ * tap_send_iov() - Send out multiple prepared frames
+ * @c:		Execution context
+ * @iov:	Array of frames, each frames is divided in an array of iovecs.
+ * 		iovec array is:
+ * 		TCP_IOV_VNET	(0)	vnet length
+ * 		TCP_IOV_ETH	(1)	ethernet header
+ * 		TCP_IOV_IP	(2)	IP (v4/v6) header
+ *		TCP_IOV_PAYLOAD	(3)	IP payload (TCP header + data)
+ *		TCP_IOV_NUM (4) is the number of entries in the iovec array
+ *		TCP_IOV_VNET entry is updated with passt, ignored with pasta.
+ * @n:		Number of frames in @iov
+ *
+ * Return: number of frames actually sent
+ */
+size_t tap_send_iov(const struct ctx *c, struct iovec iov[][TCP_IOV_NUM],
+		    size_t n)
+{
+	size_t m;
+	unsigned int i;
+
+	if (!n)
+		return 0;
+
+	switch (c->mode) {
+	case MODE_PASST:
+		m = tap_send_iov_passt(c, iov, n);
+		break;
+	case MODE_PASTA:
+		m = tap_send_iov_pasta(c, iov, n);
+		break;
+	default:
+		ASSERT(0);
+	}
+
+	if (m < n)
+		debug("tap: failed to send %zu frames of %zu", n - m, n);
+
+	for (i = 0; i < m; i++)
+		pcap_iov(&iov[i][TCP_IOV_ETH], TCP_IOV_NUM - TCP_IOV_ETH);
 
 	return m;
 }
